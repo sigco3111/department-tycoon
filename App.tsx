@@ -967,55 +967,119 @@ const App: React.FC = () => {
 
       if (isDelegationModeActiveRef.current) {
         const goldReserve = Math.max(DELEGATION_GOLD_RESERVE_FIXED_AMOUNT, goldRef.current * DELEGATION_GOLD_RESERVE_PERCENTAGE);
+        const SYNERGY_COMPLETION_SCORE_BONUS_FACTOR = 3.0; 
+        const SYNERGY_CONTRIBUTION_SCORE_BONUS_FACTOR = 1.0;
 
         if (currentTickForLogic % DELEGATION_MODE_BUILD_CHECK_INTERVAL_TICKS === 0) {
-            const emptySlots: {floorIndex: number, slotIndex: number}[] = [];
+            const possibleBuildActions: {
+                shopDef: ShopDefinition;
+                floorIndex: number;
+                slotIndex: number;
+                score: number;
+            }[] = [];
+
             floorsRef.current.forEach((floor, floorIndex) => {
                 floor.slots.forEach((slot, slotIndex) => {
-                    if (!slot.shop) emptySlots.push({floorIndex, slotIndex});
+                    if (!slot.shop) { // If slot is empty
+                        const currentShopsOnFloorTypes = floor.slots
+                            .map(s => s.shop?.shopTypeId)
+                            .filter(Boolean) as ShopType[];
+
+                        Object.values(SHOP_DEFINITIONS)
+                            .filter(shopDefToConsider =>
+                                ((!shopDefToConsider.minReputationRequired || reputationRef.current >= shopDefToConsider.minReputationRequired) || unlockedShopTypesRef.current.includes(shopDefToConsider.id)) &&
+                                (!shopDefToConsider.isResearchLocked || (shopDefToConsider.isResearchLocked && unlockedShopTypesRef.current.includes(shopDefToConsider.id))) &&
+                                goldRef.current >= shopDefToConsider.cost + goldReserve
+                            )
+                            .forEach(shopDefToConsider => {
+                                let baseScore = (shopDefToConsider.baseReputation * DELEGATION_SHOP_REPUTATION_WEIGHT + shopDefToConsider.baseIncome * DELEGATION_SHOP_INCOME_WEIGHT) / (shopDefToConsider.cost || 1);
+                                let synergyScoreContribution = 0;
+
+                                SYNERGY_DEFINITIONS.forEach(synergyDef => {
+                                    const isAlreadyActiveOnFloor = floor.activeSynergies.some(as => as.id === synergyDef.id);
+                                    if (isAlreadyActiveOnFloor) return;
+
+                                    const tempShopsOnFloorTypes = [...currentShopsOnFloorTypes, shopDefToConsider.id];
+                                    const tempShopsOnFloorCategories = tempShopsOnFloorTypes.map(typeId => SHOP_DEFINITIONS[typeId].category);
+
+                                    let completedByType = true;
+                                    if (synergyDef.requiredShopTypes.length > 0) {
+                                        completedByType = synergyDef.requiredShopTypes.every(reqType => tempShopsOnFloorTypes.includes(reqType));
+                                    }
+                                    let completedByCategory = true;
+                                    if (synergyDef.requiredCategories) {
+                                        completedByCategory = synergyDef.requiredCategories.every(reqCat =>
+                                            tempShopsOnFloorCategories.filter(cat => cat === reqCat.category).length >= reqCat.count
+                                        );
+                                    }
+
+                                    if (completedByType && completedByCategory) {
+                                        synergyScoreContribution += (shopDefToConsider.baseReputation + shopDefToConsider.baseIncome) * SYNERGY_COMPLETION_SCORE_BONUS_FACTOR;
+                                    } else {
+                                        let contributesToSynergy = false;
+                                        if (synergyDef.requiredShopTypes.length > 0 && synergyDef.requiredShopTypes.includes(shopDefToConsider.id)) {
+                                            contributesToSynergy = true;
+                                        }
+                                        if (synergyDef.requiredCategories) {
+                                            synergyDef.requiredCategories.forEach(reqCat => {
+                                                if (reqCat.category === shopDefToConsider.category) {
+                                                    const currentCountOfCategory = currentShopsOnFloorTypes
+                                                        .map(typeId => SHOP_DEFINITIONS[typeId].category)
+                                                        .filter(cat => cat === reqCat.category).length;
+                                                    if (currentCountOfCategory < reqCat.count) {
+                                                        contributesToSynergy = true;
+                                                    }
+                                                }
+                                            });
+                                        }
+                                        if (contributesToSynergy) {
+                                            synergyScoreContribution += (shopDefToConsider.baseReputation + shopDefToConsider.baseIncome) * SYNERGY_CONTRIBUTION_SCORE_BONUS_FACTOR;
+                                        }
+                                    }
+                                });
+                                
+                                let finalScore = baseScore + (synergyScoreContribution / (shopDefToConsider.cost || 1));
+
+
+                                if (CHEAP_FACILITY_TYPES_FOR_DELEGATION_LIMIT.includes(shopDefToConsider.id)) {
+                                    const getShopCount = (shopTypeId: ShopType): number => {
+                                        return floorsRef.current.reduce((count, f) => {
+                                            return count + f.slots.filter(s => s.shop?.shopTypeId === shopTypeId).length;
+                                        }, 0);
+                                    };
+                                    const currentCount = getShopCount(shopDefToConsider.id);
+                                    if (currentCount >= DELEGATION_MAX_COUNT_CHEAP_FACILITIES) {
+                                        finalScore *= 0.01;
+                                    }
+                                }
+                                
+                                const needsRestroom = !floorsRef.current.some(f => f.slots.some(s => s.shop?.shopTypeId === ShopType.RESTROOM)) && customerStatsRef.current.total > 20;
+                                if (shopDefToConsider.id === ShopType.RESTROOM && needsRestroom && unlockedShopTypesRef.current.includes(ShopType.RESTROOM)) {
+                                    finalScore *= 1000; // Apply large multiplier for essential needs
+                                }
+                    
+                                const needsInfoDesk = !floorsRef.current.some(f => f.slots.some(s => s.shop?.shopTypeId === ShopType.INFORMATION_DESK)) && customerStatsRef.current.total > 10 && floorsRef.current.length > 0 ;
+                                if (shopDefToConsider.id === ShopType.INFORMATION_DESK && needsInfoDesk && unlockedShopTypesRef.current.includes(ShopType.INFORMATION_DESK)) {
+                                    finalScore *= 800; // Apply large multiplier
+                                }
+
+                                if (finalScore > 0.001) {
+                                     possibleBuildActions.push({
+                                        shopDef: shopDefToConsider,
+                                        floorIndex,
+                                        slotIndex,
+                                        score: finalScore
+                                    });
+                                }
+                            });
+                    }
                 });
             });
 
-            if (emptySlots.length > 0) {
-                const getShopCount = (shopTypeId: ShopType): number => {
-                    return floorsRef.current.reduce((count, floor) => {
-                        return count + floor.slots.filter(slot => slot.shop?.shopTypeId === shopTypeId).length;
-                    }, 0);
-                };
-
-                const availableToBuild = Object.values(SHOP_DEFINITIONS)
-                    .filter(def => 
-                        ((!def.minReputationRequired || reputationRef.current >= def.minReputationRequired) || unlockedShopTypesRef.current.includes(def.id)) &&
-                        (!def.isResearchLocked || (def.isResearchLocked && unlockedShopTypesRef.current.includes(def.id))) &&
-                        goldRef.current >= def.cost + goldReserve
-                    )
-                    .map(def => {
-                        let score = (def.baseReputation * DELEGATION_SHOP_REPUTATION_WEIGHT + def.baseIncome * DELEGATION_SHOP_INCOME_WEIGHT) / (def.cost || 1);
-                        
-                        if (CHEAP_FACILITY_TYPES_FOR_DELEGATION_LIMIT.includes(def.id)) {
-                            const currentCount = getShopCount(def.id);
-                            if (currentCount >= DELEGATION_MAX_COUNT_CHEAP_FACILITIES) {
-                                score *= 0.01; 
-                            }
-                        }
-                        
-                        const needsRestroom = !floorsRef.current.some(f => f.slots.some(s => s.shop?.shopTypeId === ShopType.RESTROOM)) && customerStatsRef.current.total > 20;
-                        if (def.id === ShopType.RESTROOM && needsRestroom && unlockedShopTypesRef.current.includes(ShopType.RESTROOM)) {
-                            score *= 1000; 
-                        }
-            
-                        return { def, score };
-                    })
-                    .filter(item => item.score > 0.001) 
-                    .sort((a, b) => b.score - a.score);
-                
-                if (availableToBuild.length > 0) {
-                    const shopToBuildDef = availableToBuild[0].def;                    
-                    if (shopToBuildDef) {
-                        const targetSlot = emptySlots[Math.floor(Math.random() * emptySlots.length)];
-                        handleBuildShop(shopToBuildDef.id, targetSlot.floorIndex, targetSlot.slotIndex, true);
-                    }
-                }
+            if (possibleBuildActions.length > 0) {
+                possibleBuildActions.sort((a, b) => b.score - a.score);
+                const bestAction = possibleBuildActions[0];
+                handleBuildShop(bestAction.shopDef.id, bestAction.floorIndex, bestAction.slotIndex, true);
             }
         }
         
@@ -1025,7 +1089,7 @@ const App: React.FC = () => {
                 floor.slots.forEach((slot, slotIndex) => {
                     if (slot.shop && slot.shop.level < 10) { 
                         const def = SHOP_DEFINITIONS[slot.shop.shopTypeId];
-                        if (def.category === ShopCategory.FACILITY) return; 
+                        if (def.category === ShopCategory.FACILITY || def.category === ShopCategory.SPECIAL) return; 
 
                         const investmentCost = Math.floor(SHOP_INVESTMENT_COST_BASE * Math.pow(SHOP_INVESTMENT_COST_MULTIPLIER, slot.shop.level -1));
                         if (goldRef.current >= investmentCost + goldReserve) {

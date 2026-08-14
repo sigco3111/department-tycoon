@@ -3,7 +3,9 @@
 
 카이로소프트 스타일의 백화점 경영 시뮬레이션 게임입니다. 플레이어는 자신만의 백화점을 건설하고, 다양한 상점을 유치하며, 고객 만족도를 높여 최고의 리테일 제국을 만드는 것을 목표로 합니다. 재정 관리, 평판 향상, 직원 고용, 연구 개발 등 다양한 경영 요소를 통해 백화점을 성장시키세요!
 
-실행 주소 : https://dev-canvas-pi.vercel.app/
+라이브 데모 : https://sigco3111.github.io/department-tycoon/
+
+> **호스팅 이력**: 본 프로젝트는 Vercel에서 GitHub Pages로 이관되었습니다 (2026-08). 과거 Vercel alias는 더 이상 유효하지 않으므로 위 Pages URL을 사용해 주세요.
 
 ## 🌟 주요 특징 (Key Features)
 
